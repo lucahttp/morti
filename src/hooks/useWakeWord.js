@@ -6,6 +6,7 @@ const REMOTE_ROOT = "https://huggingface.co/benjamin-paine/hey-buddy/resolve/mai
 export const useWakeWord = (options = {}) => {
     const [isRecording, setIsRecording] = useState(false);
     const [isListening, setIsListening] = useState(false);
+    const [isMicActive, setIsMicActive] = useState(false);
     const [probabilities, setProbabilities] = useState({});
     const [activeDebug, setActiveDebug] = useState({});
     const [frameBudget, setFrameBudget] = useState(0);
@@ -63,6 +64,7 @@ export const useWakeWord = (options = {}) => {
                 });
 
                 heyBuddyRef.current = instance;
+                setIsMicActive(true);
             }
         } catch (err) {
             console.error("Failed to start HeyBuddy:", err);
@@ -77,6 +79,7 @@ export const useWakeWord = (options = {}) => {
         probabilities,
         active: activeDebug,
         frameBudget,
-        error
+        error,
+        isMicActive
     };
 };

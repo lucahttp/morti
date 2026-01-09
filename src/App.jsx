@@ -9,6 +9,7 @@ function App() {
     start,
     isListening,
     isRecording,
+    isMicActive,
     probabilities,
     active,
     frameBudget,
@@ -73,7 +74,7 @@ function App() {
             />
 
             {/* Overlay interaction hint */}
-            {!isListening && !error && (
+            {!isMicActive && !error && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-sm z-20 transition-all duration-500">
                 <button onClick={start} className="group relative">
                   <div className="absolute inset-0 bg-brand-teal rounded-full blur-xl opacity-20 group-hover:opacity-40 transition-opacity duration-500 animate-pulse"></div>

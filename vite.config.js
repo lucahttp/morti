@@ -27,5 +27,8 @@ export default defineConfig({
     rollupOptions: {
       external: ['legacy/**']
     }
+  },
+  optimizeDeps: {
+    entries: ['index.html', 'src/**/*.html']
   }
 })
