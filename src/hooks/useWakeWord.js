@@ -66,14 +66,33 @@ export const useWakeWord = (options = {}) => {
                 heyBuddyRef.current = instance;
                 setIsMicActive(true);
             }
+
+            // If already initialized, just resume
+            if (heyBuddyRef.current) {
+                heyBuddyRef.current.resume();
+            }
         } catch (err) {
             console.error("Failed to start HeyBuddy:", err);
             setError(err.message || "Microphone access denied or initialization failed.");
         }
     }, [options]);
 
+    const resumeListening = useCallback(() => {
+        if (heyBuddyRef.current) {
+            heyBuddyRef.current.resume();
+        }
+    }, []);
+
+    const stopListening = useCallback(() => {
+        if (heyBuddyRef.current) {
+            heyBuddyRef.current.pause();
+        }
+    }, []);
+
     return {
         start,
+        stopListening,
+        resumeListening,
         isListening,
         isRecording,
         probabilities,

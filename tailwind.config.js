@@ -22,6 +22,13 @@ export default {
             },
             animation: {
                 'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                'indeterminate': 'indeterminate 1.5s infinite linear',
+            },
+            keyframes: {
+                indeterminate: {
+                    '0%': { transform: 'translateX(-100%)' },
+                    '100%': { transform: 'translateX(100%)' },
+                }
             }
         },
     },

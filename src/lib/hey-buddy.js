@@ -139,7 +139,17 @@ export class HeyBuddy {
             targetSampleRate
         );
         this.batcher.onBatch((batch) => this.process(batch));
+        this.paused = false;
     }
+
+    pause() {
+        this.paused = true;
+    }
+
+    resume() {
+        this.paused = false;
+    }
+
 
     /**
      * Gets the names of wake words, chunked for threaded wake word detection.
@@ -317,7 +327,7 @@ export class HeyBuddy {
      */
     async process(audio) {
         // Simple lock to prevent re-entrancy if processing takes longer than the interval
-        if (this.isProcessing) return;
+        if (this.isProcessing || this.paused) return;
         this.isProcessing = true;
 
         try {

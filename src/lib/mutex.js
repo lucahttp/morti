@@ -1,32 +1,40 @@
-/** @module mutex */
-/**
- * A mutex (mutual exclusion) lock.
- *
- * @class
- */
-export class MutexLock {
-    /**
-     * Creates a new MutexLock.
-     *
-     * @constructor
-     */
+
+export class Mutex {
     constructor() {
-        this.holder = Promise.resolve();
+        this._queue = [];
+        this._locked = false;
     }
 
-    /**
-     * Acquires the lock.
-     *
-     * @returns {Promise<Callable>} A promise that resolves when the lock is acquired.
-     * Responds with a callable that releases the lock.
-     */
-    acquire() {
-        let awaitResolve,
-            temporaryPromise = new Promise((resolve) => {
-                awaitResolve = () => resolve();
-            }),
-            returnValue = this.holder.then(() => awaitResolve);
-        this.holder = temporaryPromise;
-        return returnValue;
+    lock() {
+        return new Promise((resolve) => {
+            if (this._locked) {
+                this._queue.push(resolve);
+            } else {
+                this._locked = true;
+                resolve();
+            }
+        });
+    }
+
+    unlock() {
+        if (this._queue.length > 0) {
+            const resolve = this._queue.shift();
+            resolve();
+        } else {
+            this._locked = false;
+        }
+    }
+
+    async runExclusive(callback) {
+        await this.lock();
+        try {
+            return await callback();
+        } finally {
+            this.unlock();
+        }
+    }
+
+    isLocked() {
+        return this._locked;
     }
 }
