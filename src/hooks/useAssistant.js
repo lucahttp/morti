@@ -1,13 +1,14 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import SttWorker from '../lib/workers/stt.worker.js?worker';
 import LlmWorker from '../lib/workers/llm.worker.js?worker';
 import TtsWorker from '../lib/workers/tts.worker.js?worker';
 import { Mutex } from '../lib/mutex';
+import { useTranscriber } from './useTranscriber';
 
 export const useAssistant = () => {
-    // Workers
-    const sttWorker = useRef(null);
+    const { transcribe, isTranscribing, loadingStatus: sttLoadingStatus } = useTranscriber();
+
+    // Workers (LLM & TTS still on workers for now)
     const llmWorker = useRef(null);
     const ttsWorker = useRef(null);
 
@@ -19,11 +20,17 @@ export const useAssistant = () => {
     const [transcript, setTranscript] = useState('');
     const [response, setResponse] = useState('');
 
-    // Detailed Loading State for UI (File downloads)
-    const [loadingStatus, setLoadingStatus] = useState({}); // { [filename]: { status, progress, loaded, total, source: 'stt'|'llm'|'tts' } }
+    // Detailed Loading State for UI
+    const [loadingStatus, setLoadingStatus] = useState({});
 
-    // Inference Progress (simple percent mostly for LLM generation if we hooked it up, or just keeping legacy)
-    // We'll keep 'progress' for legacy props but map it to mostly loading or inference if available.
+    // Sync STT loading status to main loading status
+    useEffect(() => {
+        if (Object.keys(sttLoadingStatus).length > 0) {
+            setLoadingStatus(prev => ({ ...prev, ...sttLoadingStatus, source: 'stt' }));
+        }
+    }, [sttLoadingStatus]);
+
+    // Inference Progress (legacy compat)
     const [progress, setProgress] = useState({ stt: 0, llm: 0, tts: 0 });
 
     const [conversation, setConversation] = useState([]);
@@ -34,62 +41,17 @@ export const useAssistant = () => {
         setLogs(prev => [...prev, { source, message, timestamp: Date.now() }].slice(-50));
     }, []);
 
-    // Helper to update loading status
+    // Helper to update loading status (for LLM/TTS workers)
     const updateLoading = useCallback((source, data) => {
-        if (!data || !data.file) return; // Ignore non-file progress
+        if (!data || !data.file) return;
         setLoadingStatus(prev => ({
             ...prev,
             [data.file]: { ...data, source }
         }));
     }, []);
 
-    // Initialize Workers Lazily
+    // Initialize Workers Lazily (LLM & TTS)
     useEffect(() => {
-        // Init STT
-        if (!sttWorker.current) {
-            sttWorker.current = new SttWorker();
-            sttWorker.current.onerror = (err) => {
-                console.error("[Assistant] STT Worker startup error:", err);
-                setStatus('error'); // Unlock just in case
-                mutex.current.unlock();
-            };
-            sttWorker.current.onmessage = (e) => {
-                const { status, data, text, output, message, error } = e.data;
-                console.log(`[Assistant] STT Worker Message: ${status}`, e.data); // RAW LOGGING
-
-                if (status === 'debug') {
-                    addLog('stt', message);
-                }
-                if (status === 'progress') {
-                    updateLoading('stt', data);
-                    if (data.progress) setProgress(p => ({ ...p, stt: data.progress }));
-                }
-                if (status === 'update') {
-                    setTranscript(prev => prev + output);
-                }
-                if (status === 'complete') {
-                    setTranscript(text);
-                    setStatus('thinking');
-
-                    ensureLlmWorker().then(worker => {
-                        const messages = [
-                            { role: 'system', content: 'You are Hey Buddy, a helpful and witty AI assistant.' },
-                            ...conversation,
-                            { role: 'user', content: text }
-                        ];
-                        setConversation(prev => [...prev, { role: 'user', content: text }]);
-                        worker.postMessage({ action: 'generate', messages });
-                    });
-                }
-                if (status === 'error') {
-                    console.error("STT Error:", error);
-                    setStatus('error');
-                    mutex.current.unlock();
-                }
-            };
-            sttWorker.current.postMessage({ action: 'init' });
-        }
-
         // Preload LLM
         if (!llmWorker.current) {
             const worker = new LlmWorker();
@@ -138,7 +100,6 @@ export const useAssistant = () => {
         }
 
         return () => {
-            sttWorker.current?.terminate();
             llmWorker.current?.terminate();
             ttsWorker.current?.terminate();
         };
@@ -198,22 +159,40 @@ export const useAssistant = () => {
 
     // We'll wrap the "Start" in a mutex check
     const processAudio = useCallback(async (audioBuffer) => {
-        // If already busy, ignore new audio (Debounce/Lock)
         if (status !== 'idle' && status !== 'listening') {
-            console.warn("Pipeline busy, ignoring audio.");
             return;
         }
 
-        // Lock pipeline
         await mutex.current.lock();
-
         setStatus('transcribing');
+
         try {
-            sttWorker.current.postMessage({ action: 'transcribe', audio: audioBuffer });
+            const text = await transcribe(audioBuffer);
+
+            if (text) {
+                setTranscript(text);
+                setStatus('thinking');
+
+                // Trigger LLM
+                const worker = await ensureLlmWorker();
+                const messages = [
+                    { role: 'system', content: 'You are Hey Buddy, a helpful and witty AI assistant.' },
+                    ...conversation,
+                    { role: 'user', content: text }
+                ];
+                setConversation(prev => [...prev, { role: 'user', content: text }]);
+                worker.postMessage({ action: 'generate', messages });
+            } else {
+                console.warn("STT returned empty text");
+                setStatus('idle');
+                mutex.current.unlock();
+            }
         } catch (e) {
-            mutex.current.unlock(); // Release if fail
+            console.error("Pipeline breakdown:", e);
+            setStatus('error');
+            mutex.current.unlock();
         }
-    }, [status]);
+    }, [status, transcribe, conversation]);
 
     const playAudio = (audioData, sampleRate) => {
         const audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate });
