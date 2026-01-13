@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useWakeWord } from './hooks/useWakeWord';
-import { useAssistant } from './hooks/useAssistant'; // Import our new hook
+import { useAssistant } from './hooks/useAssistant';
 import { useDebugAudio } from './hooks/useDebugAudio';
 import { AudioVisualizer } from './components/AudioVisualizer';
 
@@ -134,7 +134,7 @@ function App() {
       {/* Header / Top Bar */}
       <header className="relative z-10 flex items-center justify-between px-8 py-5 border-b border-white/5 bg-brand-dark/50 backdrop-blur-md">
         <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="Hey Buddy" className="h-10 w-10 object-contain drop-shadow-[0_0_10px_rgba(22,200,206,0.5)]" />
+          <img src="logo.png" alt="Hey Buddy" className="h-10 w-10 object-contain drop-shadow-[0_0_10px_rgba(22,200,206,0.5)]" />
           <div>
             <h1 className="text-xl font-bold tracking-tight text-white">Hey Buddy <span className="text-brand-teal text-opacity-80 font-mono text-sm ml-2">v0.2.0-AI</span></h1>
             <div className="flex items-center gap-2 text-xs text-white/50 font-mono">
@@ -280,7 +280,7 @@ function App() {
                     'border-white/10 grayscale opacity-80'}`}>
 
               <div className={`absolute inset-0 rounded-full bg-current opacity-10 blur-xl animate-pulse`}></div>
-              <img src="/logo.png" className={`w-20 h-20 object-contain transition-transform duration-300 ${assistantStatus !== 'idle' ? 'animate-bounce' : ''}`} />
+              <img src="logo.png" className={`w-20 h-20 object-contain transition-transform duration-300 ${assistantStatus !== 'idle' ? 'animate-bounce' : ''}`} />
             </div>
 
             <div className="text-center z-10">
