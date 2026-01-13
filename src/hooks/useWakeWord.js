@@ -29,6 +29,10 @@ export const useWakeWord = (options = {}) => {
                     vadModelPath: options.vadModelPath || `${REMOTE_ROOT}/pretrained/silero-vad.onnx`,
                     spectrogramModelPath: options.spectrogramModelPath || `${REMOTE_ROOT}/pretrained/mel-spectrogram.onnx`,
                     embeddingModelPath: options.embeddingModelPath || `${REMOTE_ROOT}/pretrained/speech-embedding.onnx`,
+                    // Tweak VAD to be less aggressive (wait longer for speaker)
+                    positiveVadThreshold: 0.8,
+                    negativeVadThreshold: 0.4,
+                    negativeVadCount: 15, // Wait longer for silence
                 });
 
                 // Set up callback
