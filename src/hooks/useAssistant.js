@@ -172,154 +172,173 @@ export const useAssistant = () => {
                 console.warn("Preload warning:", e);
             }
         };
+        if (!workerRef.current) {
+            const worker = new AiWorker();
 
-        // Delay slightly to not block UI paint
-        setTimeout(doPreload, 1000);
-    }, [runWorkerTask, handleProgress, addLog]);
+            const handleMessage = (e) => {
+                const data = e.data;
 
-    const processAudio = useCallback(async (audioBuffer) => {
+                if (data.status === 'progress') {
+                    setProgress(prev => ({
+                        ...prev,
+                        [data.file || 'model']: { ...data, source: (data.file?.includes('whisper') || data.source === 'stt') ? 'stt' : (data.file?.includes('qwen') || data.source === 'llm') ? 'llm' : 'tts' }
+                    }));
+                } else if (data.status === 'debug') {
+                    console.log("[Worker Debug]", data.message);
+                } else if (data.status === 'error') {
+                    console.error("[Worker Error]", data.error);
+                    addLog('error', data.error);
+                }
+            };
+
+            worker.addEventListener('message', handleMessage);
+            workerRef.current = worker;
+
+            // Optional: Start preloading immediately
+            worker.postMessage({ action: 'preload' });
+        }
+
+        return () => {
+            // We keep it alive for the session, but could terminate on unmount
+            // workerRef.current?.terminate();
+        };
+    }, [addLog]);
+
+    const processAudio = useCallback(async (audioData) => {
         if (mutex.current.isLocked()) return;
-
         await mutex.current.lock();
-        addLog('system', 'Starting pipeline...');
-        setStatus('transcribing');
-        setTranscript('');
-        setResponse('');
-        const currentId = Date.now();
 
         try {
-            // --- 0. Audio Preprocessing (Resample to 16kHz) ---
-            // Whisper expects 16kHz audio. If input is 44.1/48k, it produces gibberish.
-            // We assume audioBuffer is Float32Array. 
-            // Ideally we need the source sample rate. 
-            // If unknown, we might be guessing, but standard Web Audio is 44.1/48k.
-            // Since we don't have the source rate here easily (useWakeWord just passes buffer),
-            // Fix: We will assume the input is NOT 16kHz and trust the worker to use an AudioProcessor?
-            // No, transformers.js worker expects 16k if we pass raw floats.
+            setStatus('transcribing');
+            setTranscript('');
+            setResponse('');
+            addLog('system', 'Processing audio...');
 
-
-            // --- 0. Audio Preprocessing (Native AudioContext Resampling) ---
-            // Whisper requires 16000Hz. We use the browser's native resampler for quality w/ anti-aliasing.
-
+            // 1. Audio Prep (Resampling & Mono Conversion)
+            // Whisper expects 16kHz mono.
             const targetRate = 16000;
-            const sourceRate = window.AudioContext ? new window.AudioContext().sampleRate : 48000;
-            let processedAudio = audioBuffer;
 
-            addLog('system', `Input Audio: ${audioBuffer.length} samples @ ${sourceRate}Hz`);
-
-            if (sourceRate !== targetRate) {
-                try {
-                    // 1. Pack into WAV container with correctly tagged logic
-                    const wavBuffer = floatToWav(audioBuffer, sourceRate);
-
-                    // 2. Decode using a 16kHz context (triggers native resampling)
-                    const offlineCtx = new OfflineAudioContext(1, 1, targetRate); // Dummy context to get 16k env? 
-                    // Actually, OfflineAudioContext(1, length, 16000) is better but we don't know length.
-                    // We can use a standard AudioContext with sampleRate: 16000 option (supported in modern browsers).
-                    const resampleCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: targetRate });
-
-                    const decoded = await resampleCtx.decodeAudioData(wavBuffer);
-                    processedAudio = decoded.getChannelData(0);
-
-                    // Close context to free resources
-                    resampleCtx.close();
-
-                    addLog('system', `Resampled: ${processedAudio.length} samples (Native)`);
-                } catch (e) {
-                    console.error("Resample failed", e);
-                    addLog('error', `Resample Logic Failed: ${e.message}`);
-                    // Fallback to raw (might fail)
+            // Average channels if stereo (matching whisper-web reference)
+            let monoAudio;
+            if (audioData instanceof AudioBuffer) {
+                if (audioData.numberOfChannels > 1) {
+                    const SCALING_FACTOR = Math.sqrt(2);
+                    const left = audioData.getChannelData(0);
+                    const right = audioData.getChannelData(1);
+                    monoAudio = new Float32Array(left.length);
+                    for (let i = 0; i < left.length; ++i) {
+                        monoAudio[i] = (SCALING_FACTOR * (left[i] + right[i])) / 2;
+                    }
+                } else {
+                    monoAudio = audioData.getChannelData(0);
                 }
             } else {
-                addLog('system', `Rate match (16kHz). No resample needed.`);
+                // Already a Float32Array from wake word recorder
+                monoAudio = audioData;
             }
 
-            // --- 1. STT ---
-            addLog('stt', 'Initializing worker...');
+            // At this point we assume 'monoAudio' is 16kHz because useWakeWord/HeyBuddy 
+            // should already be providing 16kHz batches. Let's verify.
+            addLog('stt', `Input: ${monoAudio.length} samples`);
+
+            // 2. Transcription (Persistent Worker)
+            const worker = workerRef.current;
             let transcription = '';
 
-            await runWorkerTask('transcribe', { audio: processedAudio, language: 'en' }, (data) => {
-                if (data.status === 'progress') handleProgress(data);
-                if (data.status === 'update') {
-                    // Whisper streamer provides { text, chunks, tps } in data
-                    const text = data.data?.text || '';
-                    setTranscript(text);
-                    transcription = text;
-                }
-                if (data.status === 'complete') {
-                    transcription = data.text;
-                    setTranscript(data.text);
-                    addLog('stt', `Complete: ${data.text}`);
-                    setConversation(prev => [...prev, { role: 'user', content: data.text }]);
-                }
+            const sttPromise = new Promise((resolve, reject) => {
+                const listener = (e) => {
+                    const data = e.data;
+                    if (data.status === 'update') {
+                        const text = data.data?.text || '';
+                        setTranscript(text);
+                        transcription = text;
+                    } else if (data.status === 'complete' && (data.text || data.chunks)) {
+                        worker.removeEventListener('message', listener);
+                        transcription = data.text;
+                        setTranscript(data.text);
+                        addLog('stt', `Complete: ${data.text}`);
+                        resolve(data.text);
+                    } else if (data.status === 'error' && data.action === 'transcribe') {
+                        worker.removeEventListener('message', listener);
+                        reject(new Error(data.error));
+                    }
+                };
+                worker.addEventListener('message', listener);
+                worker.postMessage({ action: 'transcribe', data: { audio: monoAudio, language: 'en' } });
             });
 
-            if (!transcription.trim()) {
-                throw new Error("No transcription received");
-            }
+            const finalTranscript = await sttPromise;
+            if (!finalTranscript.trim()) throw new Error("No speech detected.");
 
-            // --- 2. Chat ---
+            // Update Conversation
+            setConversation(prev => [...prev, { role: 'user', content: finalTranscript }]);
+
+            // 3. Chat
             setStatus('thinking');
-            addLog('llm', 'Initializing worker...');
+            addLog('llm', 'Thinking...');
             let assistantReply = '';
 
-            // Build Context
-            // Note: conversation state might be stale in this closure, but we appended user msg above conceptually.
-            // We'll use the functional state updater or a ref if precise history is needed. 
-            // For safety, let's just use the current transcription + simple history or just transcription.
-            // To do it right: use a Ref for history tracking across the pipeline function scope.
-
-            const prompt = conversation.length > 0
-                ? [...conversation, { role: 'user', content: transcription }]
-                : [{ role: 'user', content: transcription }];
-
-            await runWorkerTask('chat', { messages: prompt }, (data) => {
-                if (data.status === 'progress') handleProgress(data);
-                if (data.status === 'update') {
-                    setResponse(prev => prev + data.output);
-                    assistantReply += data.output;
-                }
+            const chatPromise = new Promise((resolve) => {
+                const listener = (e) => {
+                    const data = e.data;
+                    if (data.status === 'update' && !data.data) { // Standard update
+                        setResponse(prev => prev + data.output);
+                        assistantReply += data.output;
+                    } else if (data.status === 'complete' && !data.text) { // Chat complete
+                        worker.removeEventListener('message', listener);
+                        addLog('llm', `Complete. Length: ${assistantReply.length}`);
+                        resolve(assistantReply);
+                    }
+                };
+                worker.addEventListener('message', listener);
+                worker.postMessage({ action: 'chat', data: { messages: [...conversation, { role: 'user', content: finalTranscript }] } });
             });
 
-            addLog('llm', `Complete. Length: ${assistantReply.length}`);
-            setConversation(prev => [...prev, { role: 'assistant', content: assistantReply }]);
+            const finalReply = await chatPromise;
+            setConversation(prev => [...prev, { role: 'assistant', content: finalReply }]);
 
-            // --- 3. TTS ---
+            // 4. TTS
             setStatus('speaking');
-            addLog('tts', 'Initializing worker...');
+            addLog('tts', 'Synthesizing...');
 
-            await runWorkerTask('speak', { text: assistantReply }, (data) => {
-                if (data.status === 'progress') handleProgress(data);
-                if (data.status === 'audio_chunk') {
-                    if (!audioPlayerRef.current) audioPlayerRef.current = new AudioQueuePlayer(data.sampleRate);
-                    audioPlayerRef.current.scheduleChunk(data.audio);
-                }
+            const ttsPromise = new Promise((resolve) => {
+                const listener = (e) => {
+                    const data = e.data;
+                    if (data.status === 'audio_chunk') {
+                        if (!audioPlayerRef.current) audioPlayerRef.current = new AudioQueuePlayer(data.sampleRate);
+                        audioPlayerRef.current.scheduleChunk(data.audio);
+                    } else if (data.status === 'complete' && !data.text) { // TTS complete
+                        worker.removeEventListener('message', listener);
+                        addLog('tts', 'Playback complete.');
+                        resolve();
+                    }
+                };
+                worker.addEventListener('message', listener);
+                worker.postMessage({ action: 'speak', data: { text: finalReply } });
             });
 
-            addLog('tts', 'Playback queued.');
+            await ttsPromise;
 
-            // Wait for queue to finish?
-            // The worker is done, but audio might still be playing.
-            // We can release mutex now or wait. Let's wait a bit.
             setTimeout(() => {
                 setStatus('idle');
                 mutex.current.unlock();
-                addLog('system', 'Pipeline finished.');
-            }, 3000);
+                addLog('system', 'Ready.');
+            }, 1000);
 
-        } catch (error) {
-            console.error(error);
-            addLog('error', error.message || error);
+        } catch (err) {
+            console.error(err);
+            addLog('error', err.message || err);
             setStatus('error');
             mutex.current.unlock();
+            setTimeout(() => setStatus('idle'), 3000);
         }
-    }, [runWorkerTask, conversation, addLog, handleProgress]);
+    }, [conversation, addLog]);
 
     return {
         status,
         transcript,
         response,
-        progress: loadingStatus,
+        progress,
         processAudio,
         logs
     };

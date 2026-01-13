@@ -33,21 +33,35 @@ env.useBrowserCache = true;
 const WHISPER_MODEL_ID = 'onnx-community/whisper-large-v3-turbo';
 const CHAT_MODEL_ID = "onnx-community/Qwen3-0.6B-ONNX";
 const CHAT_TOKENIZER_ID = "onnx-community/Qwen3-0.6B-ONNX";
-// Use absolute URL to avoid fetch issues in workers
+// Use absolute URL to avoid fetch issues in workers.
+// If you want to use a CDN, change this to your Hugging Face repo URL.
 const BASE_URL = self.location.origin;
 const TTS_BASE_PATH = `${BASE_URL}/assets/onnx`;
 
+// --- Advanced Recognition Settings ---
+const WHISPER_GEN_CONFIG = {
+    top_k: 0,
+    do_sample: false,
+    chunk_length_s: 30,
+    stride_length_s: 5,
+    return_timestamps: true,
+    force_full_sequences: false,
+};
+
 // --- Senior Pre-flight Check ---
 function checkSystemRequirements() {
-    // Check RAM (if available API)
+    // Force HF Hub (disable local model checks to avoid 404s if files missing)
+    env.allowLocalModels = false;
+    env.useBrowserCache = true;
+
     if (navigator.deviceMemory && navigator.deviceMemory < 4) {
         console.warn("[System] Low memory detected (<4GB). Models may crash.");
     }
-    // Check WebGPU
     if (!navigator.gpu) {
         console.warn("[System] WebGPU not supported. Falling back to WASM (slow).");
     }
 }
+checkSystemRequirements();
 
 // --- Singleton Model Manager (Per Worker) ---
 class ModelManager {
@@ -236,7 +250,15 @@ async function handlePreload() {
 
 async function handleTranscribe({ audio, language, model_id }) {
     console.log('[Worker] handleTranscribe called. Audio length:', audio?.length);
-    self.postMessage({ status: 'debug', message: `Worker starting transcription. Audio: ${audio?.length} samples` });
+
+    // Diagnostic: Check audio levels
+    let maxAmp = 0;
+    for (let i = 0; i < audio.length; i++) {
+        const abs = Math.abs(audio[i]);
+        if (abs > maxAmp) maxAmp = abs;
+    }
+    console.log(`[Worker] Audio Diagnostics: Max Amplitude = ${maxAmp.toFixed(4)}`);
+    self.postMessage({ status: 'debug', message: `Worker starting transcription. Signal: ${maxAmp.toFixed(2)}` });
 
     try {
         // Switch to STT pipeline
