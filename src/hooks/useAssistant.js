@@ -178,10 +178,20 @@ export const useAssistant = () => {
             const handleMessage = (e) => {
                 const data = e.data;
 
-                if (data.status === 'progress') {
+                if (data.status === 'progress' || data.status === 'initiate') {
                     setProgress(prev => ({
                         ...prev,
-                        [data.file || 'model']: { ...data, source: (data.file?.includes('whisper') || data.source === 'stt') ? 'stt' : (data.file?.includes('qwen') || data.source === 'llm') ? 'llm' : 'tts' }
+                        [data.file || 'model']: {
+                            ...data,
+                            timestamp: Date.now(),
+                            source: (data.file?.includes('whisper') || data.source === 'stt') ? 'stt' : (data.file?.includes('qwen') || data.source === 'llm') ? 'llm' : 'tts'
+                        }
+                    }));
+                } else if (data.status === 'done') {
+                    // Update to done but keep timestamp for sorting
+                    setProgress(prev => ({
+                        ...prev,
+                        [data.file || 'model']: { ...data, timestamp: Date.now(), progress: 100 }
                     }));
                 } else if (data.status === 'debug') {
                     console.log("[Worker Debug]", data.message);

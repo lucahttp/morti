@@ -294,33 +294,44 @@ function App() {
           </div>
 
           {/* Future Features / Stats */}
-          <div className="glass-panel flex-1 flex flex-col gap-4">
+          <div className="glass-panel flex-1 flex flex-col gap-4 max-h-[400px]">
             <h3 className="font-mono text-xs text-white/40 uppercase tracking-widest">Pipeline Status</h3>
 
-            {/* Active Downloads List */}
-            <div className="flex flex-col gap-3">
-              {Object.keys(progress).length > 0 && Object.entries(progress).map(([file, data]) => {
-                // Only show items that are 'initiate' or 'progress'
-                if (data.status === 'done') return null;
+            {/* Active Downloads List - Scrollable Fixed Height */}
+            <div className="flex-1 overflow-y-auto pr-1 space-y-3 scrollbar-thin scrollbar-thumb-white/10">
+              {Object.keys(progress).length > 0 && Object.entries(progress)
+                .sort(([, a], [, b]) => {
+                  // Prioritize non-done items first, then by timestamp descending
+                  if (a.status !== 'done' && b.status === 'done') return -1;
+                  if (a.status === 'done' && b.status !== 'done') return 1;
+                  return (b.timestamp || 0) - (a.timestamp || 0);
+                })
+                .map(([file, data]) => {
+                  // Determine if we should show it (optional: filter extremely old done ones?)
+                  // For now show all, sorted.
 
-                return (
-                  <div key={file} className="flex flex-col gap-1 bg-white/5 p-2 rounded border border-white/5">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="font-bold text-white/90 truncate max-w-[150px]" title={file}>{file}</span>
-                      <span className="text-white/50 font-mono">{data.source?.toUpperCase()}</span>
+                  return (
+                    <div key={file} className={`flex flex-col gap-1 bg-white/5 p-2 rounded border border-white/5 transition-opacity ${data.status === 'done' ? 'opacity-40' : 'opacity-100'}`}>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-bold text-white/90 truncate max-w-[150px]" title={file}>{file}</span>
+                        <span className="text-white/50 font-mono text-[10px]">{data.source?.toUpperCase() || (data.status === 'done' ? 'DONE' : '...')}</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+                        <div
+                          style={{ width: `${data.progress || 0}%` }}
+                          className={`h-full rounded-full transition-all duration-300 ${data.source === 'stt' ? 'bg-brand-blue' :
+                              data.source === 'llm' ? 'bg-brand-purple' :
+                                data.status === 'done' ? 'bg-brand-green/50' : 'bg-brand-green'
+                            }`}
+                        ></div>
+                      </div>
+                      <div className="flex justify-between items-center text-[10px] text-white/40 font-mono">
+                        <span>{data.status}</span>
+                        <span>{data.loaded ? (data.loaded / 1024 / 1024).toFixed(1) : 0}MB / {data.total ? (data.total / 1024 / 1024).toFixed(1) : '?'}MB</span>
+                      </div>
                     </div>
-                    <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-                      <div style={{ width: `${data.progress || 0}%` }} className={`h-full rounded-full transition-all duration-300 ${data.source === 'stt' ? 'bg-brand-blue' :
-                        data.source === 'llm' ? 'bg-brand-purple' : 'bg-brand-green'
-                        }`}></div>
-                    </div>
-                    <div className="flex justify-between items-center text-[10px] text-white/40 font-mono">
-                      <span>{data.status}</span>
-                      <span>{data.loaded ? (data.loaded / 1024 / 1024).toFixed(1) : 0}MB / {data.total ? (data.total / 1024 / 1024).toFixed(1) : '?'}MB</span>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
               {Object.keys(progress).length === 0 && (
                 <div className="text-xs text-center text-white/20 py-2 italic">Models ready or idle</div>
               )}
