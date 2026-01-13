@@ -17,7 +17,8 @@ if (globalThis.gc) {
 
 // 1. WASM & Threading Optimization
 // Point to the root where vite-plugin-static-copy puts the files
-env.backends.onnx.wasm.wasmPaths = '/';
+// Note: Adjusted to '/morti/' for GitHub Pages subpath compatibility
+env.backends.onnx.wasm.wasmPaths = '/morti/';
 env.backends.onnx.wasm.proxy = false; // Disable proxy to keep logic simple in worker
 env.backends.onnx.wasm.simd = true;   // Enable SIMD (critical for speed)
 env.backends.onnx.wasm.numThreads = 1; // Strict limit to prevent OOM
