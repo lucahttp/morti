@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useWakeWord } from './hooks/useWakeWord';
 import { useAssistant } from './hooks/useAssistant'; // Import our new hook
+import { useDebugAudio } from './hooks/useDebugAudio';
 import { AudioVisualizer } from './components/AudioVisualizer';
 
 function App() {
@@ -15,6 +16,8 @@ function App() {
     processAudio,
     logs
   } = useAssistant();
+
+  const { clips, addClip, deleteClip, getClipData } = useDebugAudio();
 
   const {
     start,
@@ -320,8 +323,8 @@ function App() {
                         <div
                           style={{ width: `${data.progress || 0}%` }}
                           className={`h-full rounded-full transition-all duration-300 ${data.source === 'stt' ? 'bg-brand-blue' :
-                              data.source === 'llm' ? 'bg-brand-purple' :
-                                data.status === 'done' ? 'bg-brand-green/50' : 'bg-brand-green'
+                            data.source === 'llm' ? 'bg-brand-purple' :
+                              data.status === 'done' ? 'bg-brand-green/50' : 'bg-brand-green'
                             }`}
                         ></div>
                       </div>
@@ -354,58 +357,59 @@ function App() {
       {/* Debug / Injection Panel */}
       <div className="absolute bottom-4 right-4 z-50 flex flex-col gap-2">
         <div className="bg-black/80 backdrop-blur text-white p-4 rounded-lg border border-white/10 shadow-xl max-w-sm">
-          <h4 className="text-xs font-bold mb-2 text-brand-teal uppercase tracking-wider">Debug: Audio Injection</h4>
-          <div className="flex gap-2">
-            <button
-              onClick={() => {
-                const inject = async (file) => {
-                  let audioContext = null;
-                  try {
-                    console.log(`[Debug] Fetching ${file}...`);
-                    const response = await fetch(file);
-                    const arrayBuffer = await response.arrayBuffer();
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                    const channelData = audioBuffer.getChannelData(0);
-                    console.log(`[Debug] Audio decoded. Sample rate: ${audioBuffer.sampleRate}, Length: ${channelData.length}`);
-                    processAudio(channelData);
-                  } catch (e) {
-                    console.error("Injection failed:", e);
-                  } finally {
-                    if (audioContext) audioContext.close();
+          <div className="flex justify-between items-center mb-2">
+            <h4 className="text-xs font-bold text-brand-teal uppercase tracking-wider">Debug: Audio Injection</h4>
+            <label className="cursor-pointer px-2 py-0.5 bg-white/10 hover:bg-white/20 text-[10px] rounded border border-white/10 transition-colors">
+              UPLOAD WAV
+              <input
+                type="file"
+                accept="audio/wav"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files?.[0]) {
+                    addClip(e.target.files[0]);
                   }
-                };
-                inject('/clip.wav');
-              }}
-              className="px-3 py-1 bg-white/10 hover:bg-brand-blue/50 text-xs rounded transition-colors"
-            >
-              Inject clip.wav
-            </button>
-            <button
-              onClick={() => {
-                const inject = async (file) => {
-                  let audioContext = null;
-                  try {
-                    console.log(`[Debug] Fetching ${file}...`);
-                    const response = await fetch(file);
-                    const arrayBuffer = await response.arrayBuffer();
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                    const channelData = audioBuffer.getChannelData(0);
-                    console.log(`[Debug] Audio decoded. Sample rate: ${audioBuffer.sampleRate}, Length: ${channelData.length}`);
-                    processAudio(channelData);
-                  } catch (e) {
-                    console.error("Injection failed:", e);
-                  } finally {
-                    if (audioContext) audioContext.close();
-                  }
-                };
-                inject('/clip (1).wav');
-              }}
-              className="px-3 py-1 bg-white/10 hover:bg-brand-purple/50 text-xs rounded transition-colors"
-            >
-              Inject clip (1).wav
-            </button>
+                }}
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-col gap-1.5 max-h-[150px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-white/10">
+            {clips.length === 0 && (
+              <p className="text-[10px] text-white/40 italic">No clips uploaded. Use UPLOAD WAV button above.</p>
+            )}
+            {clips.map((clip) => (
+              <div key={clip.id} className="flex items-center gap-2 group">
+                <button
+                  onClick={async () => {
+                    let audioContext = null;
+                    try {
+                      const data = await getClipData(clip.id);
+                      audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                      const audioBuffer = await audioContext.decodeAudioData(data);
+                      const channelData = audioBuffer.getChannelData(0);
+                      console.log(`[Debug] Injecting ${clip.name}. Samples: ${channelData.length}`);
+                      processAudio(channelData);
+                    } catch (e) {
+                      console.error("Injection failed:", e);
+                    } finally {
+                      if (audioContext) audioContext.close();
+                    }
+                  }}
+                  className="flex-1 text-left px-2 py-1 bg-white/5 hover:bg-brand-blue/30 text-[10px] rounded transition-colors truncate"
+                  title={`Inject ${clip.name}`}
+                >
+                  {clip.name}
+                </button>
+                <button
+                  onClick={() => deleteClip(clip.id)}
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 text-[10px] transition-all"
+                  title="Delete clip"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       </div>
