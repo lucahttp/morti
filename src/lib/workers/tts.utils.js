@@ -156,11 +156,12 @@ export async function loadOnnx(onnxPath, opts) {
 }
 
 export async function loadOnnxAll(basePath, opts, onProgress) {
+    const finalPath = basePath || `${self.location.origin}/assets/onnx`;
     const models = [
-        { name: 'Duration Predictor', path: `${basePath}/duration_predictor.onnx`, key: 'dpOrt' },
-        { name: 'Text Encoder', path: `${basePath}/text_encoder.onnx`, key: 'textEncOrt' },
-        { name: 'Vector Estimator', path: `${basePath}/vector_estimator.onnx`, key: 'vectorEstOrt' },
-        { name: 'Vocoder', path: `${basePath}/vocoder.onnx`, key: 'vocoderOrt' }
+        { name: 'Duration Predictor', path: `${finalPath}/duration_predictor.onnx`, key: 'dpOrt' },
+        { name: 'Text Encoder', path: `${finalPath}/text_encoder.onnx`, key: 'textEncOrt' },
+        { name: 'Vector Estimator', path: `${finalPath}/vector_estimator.onnx`, key: 'vectorEstOrt' },
+        { name: 'Vocoder', path: `${finalPath}/vocoder.onnx`, key: 'vocoderOrt' }
     ];
 
     const result = {};
@@ -178,7 +179,8 @@ export async function loadOnnxAll(basePath, opts, onProgress) {
 }
 
 export async function loadCfgs(basePath) {
-    const url = `${basePath}/tts.json`;
+    const finalPath = basePath || `${self.location.origin}/assets/onnx`;
+    const url = `${finalPath}/tts.json`;
     console.log(`[TTS] Fetching Config: ${url}`);
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Failed to load tts.json from ${url}: ${response.statusText}`);
@@ -186,7 +188,8 @@ export async function loadCfgs(basePath) {
 }
 
 export async function loadProcessors(basePath) {
-    const url = `${basePath}/unicode_indexer.json`;
+    const finalPath = basePath || `${self.location.origin}/assets/onnx`;
+    const url = `${finalPath}/unicode_indexer.json`;
     console.log(`[TTS] Fetching Processor: ${url}`);
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Failed to load unicode_indexer.json from ${url}: ${response.statusText}`);
@@ -201,7 +204,6 @@ export async function loadStyleEmbeddings(voice, basePath = null) {
     console.log(`[TTS] Fetching Style: ${url}`);
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Failed to load voice ${voice} from ${url}: ${response.statusText}`);
-
     const embeddingData = await response.json();
 
     // Convert to Tensor
@@ -225,11 +227,9 @@ export async function loadStyleEmbeddings(voice, basePath = null) {
 
 // --- Generation ---
 
-export async function generateSupertonicSpeech(text, models, cfgs, processors, voice, onAudioChunk) {
+export async function generateSupertonicSpeech(text, models, cfgs, processors, voice, onAudioChunk, styleBasePath = null) {
     // 1. Load Voice Style
-    // Note: In a real worker, we might cache this style tensor to avoid re-fetching per sentence.
-    // For now we fetch it.
-    const styles = await loadStyleEmbeddings(voice);
+    const styles = await loadStyleEmbeddings(voice, styleBasePath);
     const { styleTtl: styleTtlTensor, styleDp: styleDpTensor } = styles;
 
     const textList = [text];

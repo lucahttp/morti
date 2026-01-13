@@ -20,7 +20,7 @@ if (globalThis.gc) {
 env.backends.onnx.wasm.wasmPaths = '/';
 env.backends.onnx.wasm.proxy = false; // Disable proxy to keep logic simple in worker
 env.backends.onnx.wasm.simd = true;   // Enable SIMD (critical for speed)
-env.backends.onnx.wasm.numThreads = 1; // Unchecked CPU vendor fix: limit threads to 1 or 4. '1' often simpler for stability.
+env.backends.onnx.wasm.numThreads = 1; // Strict limit to prevent OOM
 // Note: 'Unknown CPU vendor' is often benign log noise from emscripten/cpuinfo.
 
 // 2. Memory & Cache
@@ -28,15 +28,27 @@ env.allowLocalModels = false;
 env.useBrowserCache = true;
 // env.backends.onnx.logLevel = 'warning'; // Reduce noise
 
+// --- Helper: Aggressive Memory Recovery ---
+async function flushMemory() {
+    try {
+        if (globalThis.gc) globalThis.gc();
+    } catch (e) { }
+}
+
 // --- Constants ---
 // Use Turbo model as per whisper-web example for best performance/accuracy balance
 const WHISPER_MODEL_ID = 'onnx-community/whisper-large-v3-turbo';
 const CHAT_MODEL_ID = "onnx-community/Qwen3-0.6B-ONNX";
 const CHAT_TOKENIZER_ID = "onnx-community/Qwen3-0.6B-ONNX";
 // Use absolute URL to avoid fetch issues in workers.
-// If you want to use a CDN, change this to your Hugging Face repo URL.
+// IMPORTANT: Pointing to the official Supertone/supertonic-2 repo on Hugging Face
+const TTS_CDN_URL = "https://huggingface.co/Supertone/supertonic-2/resolve/main";
+
 const BASE_URL = self.location.origin;
-const TTS_BASE_PATH = `${BASE_URL}/assets/onnx`;
+// If CDN is present, models are in /onnx/
+const TTS_BASE_PATH = TTS_CDN_URL ? `${TTS_CDN_URL}/onnx` : `${BASE_URL}/assets/onnx`;
+// Voice styles are in /voice_styles/
+const TTS_STYLE_BASE = TTS_CDN_URL ? `${TTS_CDN_URL}/voice_styles` : `${BASE_URL}/assets/voice_styles`;
 
 // --- Advanced Recognition Settings ---
 const WHISPER_GEN_CONFIG = {
@@ -167,12 +179,12 @@ class ChatPipeline {
 }
 
 class TtsPipeline {
-    static async create(progress_callback) {
+    static async create(progress_callback, basePath = TTS_BASE_PATH) {
         console.log("[TTS] Loading configs...");
-        const cfgs = await loadCfgs(TTS_BASE_PATH);
+        const cfgs = await loadCfgs(basePath);
 
         console.log("[TTS] Loading ONNX models...");
-        const models = await loadOnnxAll(TTS_BASE_PATH, {
+        const models = await loadOnnxAll(basePath, {
             executionProviders: ['webgpu'],
             graphOptimizationLevel: 'all',
             executionMode: 'sequential',
@@ -182,7 +194,7 @@ class TtsPipeline {
         });
 
         console.log("[TTS] Loading processors...");
-        const processors = await loadProcessors(TTS_BASE_PATH);
+        const processors = await loadProcessors(basePath);
 
         console.log("[TTS] Pipeline ready.");
         return {
@@ -241,7 +253,7 @@ async function handlePreload() {
 
     try {
         self.postMessage({ status: 'progress', file: 'tts_check', progress: 0 });
-        const tts = await TtsPipeline.create((p) => self.postMessage({ status: 'progress', ...p }));
+        const tts = await TtsPipeline.create((p) => self.postMessage({ status: 'progress', ...p }), TTS_BASE_PATH);
         await tts.dispose();
     } catch (e) { console.error("TTS Preload failed", e); }
 
@@ -274,8 +286,6 @@ async function handleTranscribe({ audio, language, model_id }) {
             transcriber.model.config.max_source_positions;
 
         const chunks = [];
-        const chunk_length_s = 30;
-        const stride_length_s = 5;
         let chunk_count = 0;
         let start_time;
         let num_tokens = 0;
@@ -284,7 +294,7 @@ async function handleTranscribe({ audio, language, model_id }) {
         const streamer = new WhisperTextStreamer(transcriber.tokenizer, {
             time_precision,
             on_chunk_start: (x) => {
-                const offset = (chunk_length_s - stride_length_s) * chunk_count;
+                const offset = (WHISPER_GEN_CONFIG.chunk_length_s - WHISPER_GEN_CONFIG.stride_length_s) * chunk_count;
                 chunks.push({
                     text: "",
                     timestamp: [offset + x, null],
@@ -325,14 +335,9 @@ async function handleTranscribe({ audio, language, model_id }) {
 
         // Actually run transcription
         const output = await transcriber(audio, {
-            top_k: 0,
-            do_sample: false,
-            chunk_length_s,
-            stride_length_s,
+            ...WHISPER_GEN_CONFIG,
             language: language || 'english',
             task: 'transcribe',
-            return_timestamps: true,
-            force_full_sequences: false,
             streamer,
         });
 
@@ -348,6 +353,10 @@ async function handleTranscribe({ audio, language, model_id }) {
         }
 
         self.postMessage({ status: 'complete', text: outputText, chunks: chunks });
+
+        // CLEANUP: Immediately nullify large audio buffer to free memory
+        audio = null;
+        await flushMemory();
     } catch (e) {
         console.error("[Worker] Transcribe Error:", e);
         self.postMessage({ status: 'error', error: e.message || e });
@@ -388,7 +397,7 @@ async function handleChat({ messages, model_id }) {
     });
 
     // Tokenize
-    const inputs = tokenizer(prompt);
+    let inputs = tokenizer(prompt);
 
     // Streamer
     const streamer = new TextStreamer(tokenizer, {
@@ -421,13 +430,17 @@ async function handleChat({ messages, model_id }) {
 
     // past_key_values_cache = past_key_values; // Update cache if used
 
+    // CLEANUP: Free tokenized inputs and sequences
+    inputs = null;
+    await flushMemory();
+
     self.postMessage({ status: 'complete' });
 }
 
 
 async function handleSpeak({ text, voice }) {
     // Sanitize text: Remove <think>...</think> tags and their content for TTS
-    const sanitizedText = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    let sanitizedText = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
     if (!sanitizedText) {
         self.postMessage({ status: 'complete', message: 'No speakable text after filtering.' });
@@ -435,16 +448,11 @@ async function handleSpeak({ text, voice }) {
     }
 
     const pipeline = await manager.switchPipeline('tts', () =>
-        TtsPipeline.create((p) => self.postMessage({ status: 'progress', ...p }))
+        TtsPipeline.create((p) => self.postMessage({ status: 'progress', ...p }), TTS_BASE_PATH)
     );
 
-    // We need to pass the pipeline components to the generator function
-    // But verify `generateSupertonicSpeech` signature.
-    // It relied on global `models`, `cfgs` in the original script.
-    // We need to refactor tts.utils.js to accept these as args.
-
     // Assuming refactored utils:
-    const result = await generateSupertonicSpeech(
+    let result = await generateSupertonicSpeech(
         sanitizedText,
         pipeline.models,
         pipeline.cfgs,
@@ -452,8 +460,15 @@ async function handleSpeak({ text, voice }) {
         voice || 'M3', // default voice
         (audioChunk, sampleRate) => {
             self.postMessage({ status: 'audio_chunk', audio: audioChunk, sampleRate });
-        }
+        },
+        TTS_STYLE_BASE
     );
+
+    // CLEANUP: Immediately nullify large data to free memory
+    text = null;
+    sanitizedText = null;
+    result = null;
+    await flushMemory();
 
     self.postMessage({ status: 'complete' });
 }
